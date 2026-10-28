@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.6.1.0] - 2026-10-28 (Beta)
+
+[0.6.1] Fix video export Pt. 2
+
 ## [0.6.0.111] - 2026-09-12 (Beta)
 
 - [Fix] Graphics Device and inputs not being properly initialized when used with OpenTaiko Hub 0.2 or newer
