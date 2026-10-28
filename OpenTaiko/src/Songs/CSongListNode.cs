@@ -1,4 +1,6 @@
 ﻿using System.Drawing;
+using System.Runtime.Serialization;
+using System.Text.Json.Serialization;
 
 namespace OpenTaiko;
 
@@ -15,16 +17,18 @@ internal class CSongListNode {
 		RANDOM,
 		UNKNOWN
 	}
+	[JsonIgnore]  // runtime counter, reassigned by the constructor on load
 	public int nID { get; private set; }
 	public CScore[] score = new CScore[(int)Difficulty.Total];
 
 	public string[] difficultyLabel = new string[(int)Difficulty.Total];
 
-	public Color ForeColor = Color.White;
-	public Color BackColor = Color.Black;
-	public Color BoxColor = Color.White;
+	// Colors are re-derived from the parent node on load, so they are not JSON-cached.
+	[JsonIgnore] public Color ForeColor = Color.White;
+	[JsonIgnore] public Color BackColor = Color.Black;
+	[JsonIgnore] public Color BoxColor = Color.White;
 
-	public Color BgColor = Color.White;
+	[JsonIgnore] public Color BgColor = Color.White;
 	public bool isChangedBgColor;
 	public bool isChangedBgType;
 	public bool isChangedBoxType;
@@ -36,12 +40,15 @@ internal class CSongListNode {
 	public bool IsChangedForeColor;
 	public bool IsChangedBackColor;
 	public bool isChangedBoxColor;
-	public List<CSongListNode> randomList;
-	public List<CSongListNode> childrenList;
+	[JsonIgnore] public List<CSongListNode> randomList;     // tree links: rebuilt by enumeration, not cached
+	[JsonIgnore] public List<CSongListNode> childrenList;
+
+	public CTja.ETjaCompat Compat;
+	public bool isChangedCompat;
 
 	public int difficultiesCount; // 4~5 if AD
 
-	public CSongListNode rParentNode;
+	[JsonIgnore] public CSongListNode rParentNode;     // re-established from the enumeration context on load
 
 	// Internal
 	public int Openindex;
@@ -60,6 +67,9 @@ internal class CSongListNode {
 	public bool bExplicit = false;
 	public bool bMovie = false;
 	public int[] nLevel = new int[(int)Difficulty.Total] { 0, 0, 0, 0, 0, 0, 0 };
+	// The LEVEL value with its fractional part kept (e.g. 12.888); parallels nLevel. -1 = no decimal known,
+	// in which case consumers fall back to nLevel. Only the .tja path carries a real fraction; .tci/.tcm use the int.
+	public double[] dLevel = new double[(int)Difficulty.Total] { -1, -1, -1, -1, -1, -1, -1 };
 	public CTja.ELevelIcon[] nLevelIcon = new CTja.ELevelIcon[(int)Difficulty.Total] { CTja.ELevelIcon.eNone, CTja.ELevelIcon.eNone, CTja.ELevelIcon.eNone, CTja.ELevelIcon.eNone, CTja.ELevelIcon.eNone, CTja.ELevelIcon.eNone, CTja.ELevelIcon.eNone };
 
 	// Custom metadata handlers
@@ -84,7 +94,7 @@ internal class CSongListNode {
 	public bool shortcutIsParsed;
 
 	public int nDanTick = 0;
-	public Color cDanTickColor = Color.White;
+	[JsonIgnore] public Color cDanTickColor = Color.White;
 
 	public CLocalizationData[] strBoxText = new CLocalizationData[3] { new CLocalizationData(), new CLocalizationData(), new CLocalizationData() };
 
@@ -108,7 +118,8 @@ internal class CSongListNode {
 	// Constructor
 
 	public CSongListNode() {
-		this.nID = id++;
+		// Increment atomically because the song enumeration can build nodes concurrently.
+		this.nID = Interlocked.Increment(ref lastAssignedID);
 	}
 
 	public CSongListNode Clone() {
@@ -130,9 +141,19 @@ internal class CSongListNode {
 
 	// その他
 
+	/// <summary>
+	/// Restores fields that have default initializers after BinaryFormatter deserialization,
+	/// which bypasses constructors and field initializers for fields added in newer versions.
+	/// </summary>
+	[OnDeserialized]
+	private void OnDeserialized(StreamingContext context) {
+		customMetadataGScope ??= new Dictionary<string, string>();
+		customMetadataCScope ??= Enumerable.Range(0, (int)Difficulty.Total).Select(_ => new Dictionary<string, string>()).ToArray();
+	}
+
 	#region [ private ]
 	//-----------------
-	private static int id;
+	private static int lastAssignedID = -1;
 	//-----------------
 	#endregion
 }

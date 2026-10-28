@@ -6,7 +6,6 @@ namespace OpenTaiko;
 
 class CPuchichara {
 	public CTexture tx;
-	public CTexture render;
 	public CSkin.CSystemSound welcome;
 	public DBPuchichara.PuchicharaData metadata;
 	public DBPuchichara.PuchicharaEffect effect;
@@ -17,7 +16,7 @@ class CPuchichara {
 		=> effect.GetCoinMultiplier(HRarity.tRarityToRarityToCoinMultiplier(metadata.Rarity), allPurpleEnabled, autorollEnabled, showAdlibEnabled, splitLaneEnabled);
 
 	public void tGetUnlockedItems(int _player, ModalQueue mq) {
-		int player = OpenTaiko.GetActualPlayer(_player);
+		int player = _player;
 		var _sf = OpenTaiko.SaveFileInstances[player].data.UnlockedPuchicharas;
 		bool _edited = false;
 
@@ -53,9 +52,6 @@ class CPuchichara {
 		if (tx != null) {
 			tx.vcScaleRatio = new Vector3D<float>(OpenTaiko.Skin.Game_PuchiChara_Scale[0]);
 		}
-
-		// Heya render
-		render = OpenTaiko.Tx.TxCAbsolute($@"{path}{Path.DirectorySeparatorChar}Render.png");
 
 		// Puchichara welcome sfx
 		welcome = new CSkin.CSystemSound($@"{path}{Path.DirectorySeparatorChar}Welcome.ogg", false, false, true, ESoundGroup.Voice);

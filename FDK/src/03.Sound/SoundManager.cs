@@ -7,6 +7,36 @@ namespace FDK;
 
 public class SoundManager   // : CSound
 {
+	public static bool IsDeviceTypeSupported(ESoundDeviceType type)
+		=> type is ESoundDeviceType.Bass
+			or ESoundDeviceType.ASIO
+			or ESoundDeviceType.ExclusiveWASAPI
+			or ESoundDeviceType.SharedWASAPI;
+
+	/// <summary>The devices tried in turn for a requested one: WASAPI and ASIO mean BASS outside Windows (a
+	/// Config.ini copied from Windows); then the requested device, the ones after it in the setting's order,
+	/// BASS when it was not among them, and none (Unknown) last.</summary>
+	public static List<ESoundDeviceType> DeviceTryOrder(ESoundDeviceType requested, bool isWindows) {
+		ESoundDeviceType[] order = {
+			ESoundDeviceType.Bass,
+			ESoundDeviceType.ExclusiveWASAPI,
+			ESoundDeviceType.SharedWASAPI,
+			ESoundDeviceType.ASIO,
+		};
+		if (!isWindows && requested is ESoundDeviceType.ExclusiveWASAPI or ESoundDeviceType.SharedWASAPI or ESoundDeviceType.ASIO)
+			requested = ESoundDeviceType.Bass;
+		var list = new List<ESoundDeviceType>();
+		int start = Array.IndexOf(order, requested);
+		if (start >= 0) {
+			for (int i = start; i < order.Length; i++)
+				list.Add(order[i]);
+		}
+		if (!list.Contains(ESoundDeviceType.Bass))
+			list.Add(ESoundDeviceType.Bass);
+		list.Add(ESoundDeviceType.Unknown);
+		return list;
+	}
+
 	private static ISoundDevice SoundDevice {
 		get; set;
 	}
@@ -22,6 +52,12 @@ public class SoundManager   // : CSound
 	// システムのタイマーを使うようになる。こうするとスクロールは滑らかになるが、音ズレが出るかもしれない。
 
 	public static bool bIsTimeStretch = false;
+
+	/// <summary>Silences the output device's master mixer (offline video export). Per-channel volume
+	/// attributes are untouched, so the exporter's sound-event capture still reads true levels.</summary>
+	public static void MuteMasterOutput() {
+		try { if (SoundDevice != null) SoundDevice.nMasterVolume = 0; } catch { /* best effort */ }
+	}
 
 	private static IWindow Window_;
 
@@ -164,6 +200,7 @@ public class SoundManager   // : CSound
 		}
 	}
 
+	public static long nBytesPerSec => SoundDevice.nBytesPerSec;
 	#endregion
 
 
@@ -181,8 +218,9 @@ public class SoundManager   // : CSound
 		//bUseOSTimer = false;
 		tInitialize(soundDeviceType, nSoundDelayBASS, nSoundDelayExclusiveWASAPI, nSoundDelayASIO, nASIODevice, _bUseOSTimer);
 	}
+
 	public void Dispose() {
-		t終了();
+		tEnd();
 	}
 
 	//public static void t初期化()
@@ -213,50 +251,23 @@ public class SoundManager   // : CSound
 		ASIODevice = _nASIODevice;
 		bUseOSTimer = _bUseOSTimer;
 
-		ESoundDeviceType[] ESoundDeviceTypes = new ESoundDeviceType[5]
-		{
-			ESoundDeviceType.Bass,
-			ESoundDeviceType.ExclusiveWASAPI,
-			ESoundDeviceType.SharedWASAPI,
-			ESoundDeviceType.ASIO,
-			ESoundDeviceType.Unknown
-		};
-
-		int initialDevice;
-		switch (soundDeviceType) {
-			case ESoundDeviceType.Bass:
-				initialDevice = 0;
-				break;
-			case ESoundDeviceType.ExclusiveWASAPI:
-				initialDevice = 1;
-				break;
-			case ESoundDeviceType.SharedWASAPI:
-				initialDevice = 2;
-				break;
-			case ESoundDeviceType.ASIO:
-				initialDevice = 3;
-				break;
-			default:
-				initialDevice = 4;
-				break;
-		}
-		for (SoundDeviceType = ESoundDeviceTypes[initialDevice]; ; SoundDeviceType = ESoundDeviceTypes[++initialDevice]) {
+		if (!OperatingSystem.IsWindows() && soundDeviceType is ESoundDeviceType.ExclusiveWASAPI or ESoundDeviceType.SharedWASAPI or ESoundDeviceType.ASIO)
+			Trace.TraceInformation($"{soundDeviceType} is only available on Windows; using BASS.");
+		foreach (var deviceType in DeviceTryOrder(soundDeviceType, OperatingSystem.IsWindows())) {
+			SoundDeviceType = deviceType;
 			try {
 				tReloadSoundDeviceAndSound();
 				break;
 			} catch (Exception e) {
 				Trace.TraceError(e.ToString());
 				Trace.TraceError("例外が発生しましたが処理を継続します。 (2609806d-23e8-45c2-9389-b427e80915bc)");
-				if (ESoundDeviceTypes[initialDevice] == ESoundDeviceType.Unknown) {
+				if (deviceType == ESoundDeviceType.Unknown) {
 					Trace.TraceError(string.Format("サウンドデバイスの初期化に失敗しました。"));
 					break;
 				}
 			}
 		}
-		if (soundDeviceType == ESoundDeviceType.Bass
-			|| soundDeviceType == ESoundDeviceType.ExclusiveWASAPI
-			|| soundDeviceType == ESoundDeviceType.SharedWASAPI
-			|| soundDeviceType == ESoundDeviceType.ASIO) {
+		if (IsDeviceTypeSupported(soundDeviceType)) {
 			//Bass.BASS_SetConfig( BASSConfig.BASS_CONFIG_UPDATETHREADS, 4 );
 			//Bass.BASS_SetConfig( BASSConfig.BASS_CONFIG_UPDATEPERIOD, 0 );
 
@@ -274,7 +285,7 @@ public class SoundManager   // : CSound
 	}
 
 
-	public static void t終了() {
+	public static void tEnd() {
 		SoundDevice.Dispose();
 		PlayTimer.Dispose();    // Global.Bass を解放した後に解放すること。（Global.Bass で参照されているため）
 	}
@@ -331,6 +342,14 @@ public class SoundManager   // : CSound
 
 		CSound.tReloadSound(SoundDevice);       // すでに生成済みのサウンドがあれば作り直す。
 	}
+	// a sound fed from code through a stream procedure (a video's audio track)
+	public CSound tCreateUserSound(int frequency, int channels, double durationSeconds, StreamProcedure proc, ESoundGroup soundGroup) {
+		if (SoundDeviceType == ESoundDeviceType.Unknown) {
+			throw new Exception(string.Format("未対応の SoundDeviceType です。[{0}]", SoundDeviceType.ToString()));
+		}
+		return SoundDevice.tCreateUserSound(frequency, channels, durationSeconds, proc, soundGroup);
+	}
+
 	public CSound tCreateSound(string filename, ESoundGroup soundGroup) {
 		if (!File.Exists(filename)) {
 			Trace.TraceWarning($"[i18n] File does not exist: {filename}");
@@ -340,7 +359,12 @@ public class SoundManager   // : CSound
 		if (SoundDeviceType == ESoundDeviceType.Unknown) {
 			throw new Exception(string.Format("未対応の SoundDeviceType です。[{0}]", SoundDeviceType.ToString()));
 		}
-		return SoundDevice.tCreateSound(filename, soundGroup);
+		try {
+			return SoundDevice.tCreateSound(filename, soundGroup);
+		} catch (Exception ex) {
+			Trace.TraceWarning($"Failed to create sound: {System.IO.Path.GetFileName(filename)}: {ex.Message}");
+			return null;
+		}
 	}
 
 	private static DateTime lastUpdateTime = DateTime.MinValue;
@@ -364,19 +388,19 @@ public class SoundManager   // : CSound
 		}
 	}
 
-	public void AddMixer(CSound cs, double db再生速度, bool _b演奏終了後も再生が続くチップである) {
-		cs.b演奏終了後も再生が続くチップである = _b演奏終了後も再生が続くチップである;
-		cs.PlaySpeed = db再生速度;
+	public void AddMixer(CSound cs, double dbPlaybackSpeed, bool _bPlayEndAfterPlaybackContinuesChip) {
+		cs.bPlayEndAfterPlaybackContinuesChip = _bPlayEndAfterPlaybackContinuesChip;
+		cs.PlaySpeed = dbPlaybackSpeed;
 		cs.AddBassSoundFromMixer();
 	}
-	public void AddMixer(CSound cs, double db再生速度) {
-		cs.PlaySpeed = db再生速度;
+	public void AddMixer(CSound cs, double dbPlaybackSpeed) {
+		cs.PlaySpeed = dbPlaybackSpeed;
 		cs.AddBassSoundFromMixer();
 	}
 	public void AddMixer(CSound cs) {
 		cs.AddBassSoundFromMixer();
 	}
 	public void RemoveMixer(CSound cs) {
-		cs.tRemoveSoundFromMixer();
+		cs.tRemoveFromMixer();
 	}
 }

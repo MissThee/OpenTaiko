@@ -90,7 +90,7 @@ class HGaugeMethods {
 	};
 
 	public static float tHardGaugeGetKillscreenRatio(Difficulty diff, int level, EGaugeType gaugeType, int perfectHits, int totalNotes) {
-		if (gaugeType != EGaugeType.EXTREME) return 0f;
+		if (gaugeType != EGaugeType.EXTREME || totalNotes <= 0) return 0f;
 
 		float norma = tGetCurrentGaugeNorma(diff, level);
 		float ratio = Math.Min(1f, Math.Max(0f, perfectHits / (float)totalNotes));
@@ -118,12 +118,14 @@ class HGaugeMethods {
 
 		return gt;
 	}
-	public static EGaugeType tGetGaugeTypeEnum(CCharacter? chara)
+	public static EGaugeType tGetGaugeTypeEnum(CCharacter.Info? chara)
 		=> (chara == null) ? EGaugeType.NORMAL : tGetGaugeTypeEnum(chara.effect.tGetGaugeType());
 	public static EGaugeType? tGetGaugeTypeEnum(CTja? tja) => tja?.forceGauge;
+	// the chart's forced gauge, else the player's character's; the AI battle's AI plays on the normal gauge
 	public static EGaugeType tGetGaugeTypeEnum(int player)
 		=> tGetGaugeTypeEnum(OpenTaiko.GetTJA(player))
-			?? tGetGaugeTypeEnum(OpenTaiko.Tx.Characters[OpenTaiko.SaveFileInstances[OpenTaiko.GetActualPlayer(player)].data.Character]);
+			?? (AIBattleModMirror.IsAI(OpenTaiko.ConfigIni, player) ? EGaugeType.NORMAL
+				: tGetGaugeTypeEnum(OpenTaiko.Tx.Characters[OpenTaiko.SaveFileInstances[player].data.Character]));
 
 	public static bool tNormaCheck(Difficulty diff, int level, EGaugeType gaugeType, float percentObtained, float killZonePercent) {
 		float percent = Math.Min(100f, Math.Max(0f, percentObtained));
@@ -151,7 +153,7 @@ class HGaugeMethods {
 			baseTexture.vcScaleRatio.X = scale_x;
 			baseTexture.vcScaleRatio.Y = scale_y;
 
-			baseTexture.t2D描画(x, y,
+			baseTexture.t2DDraw(x, y,
 				new Rectangle(
 					GaugeBox[0],
 					GaugeBox[1],
@@ -175,7 +177,7 @@ class HGaugeMethods {
 			int texStartPoint = (int)(gaugeTexLength * (norma / 100f));
 			int xOff = (int)(scale_x * texStartPoint);
 
-			baseTexture.t2D描画(x + xOff, y,
+			baseTexture.t2DDraw(x + xOff, y,
 				new Rectangle(
 					GaugeBox[0] + texStartPoint,
 					GaugeBox[1],
@@ -222,7 +224,7 @@ class HGaugeMethods {
 
 			fillTexture.Opacity = 255;
 			if (gaugeType != EGaugeType.NORMAL && tIsDangerHardGauge(diff, level, gaugeType, percent, perfectHits, totalNotes)) fillTexture.Opacity = 255 - flashOpacity;
-			fillTexture.t2D描画(x, y,
+			fillTexture.t2DDraw(x, y,
 				new Rectangle(
 					GaugeBox[0],
 					GaugeBox[1],
@@ -244,7 +246,7 @@ class HGaugeMethods {
 			yellowTexture.vcScaleRatio.Y = scale_y;
 
 			yellowTexture.Opacity = 255;
-			yellowTexture.t2D描画(x + xOff, y,
+			yellowTexture.t2DDraw(x + xOff, y,
 				new Rectangle(
 					GaugeBox[0] + texStartPoint,
 					GaugeBox[1],
@@ -259,7 +261,7 @@ class HGaugeMethods {
 			rainbowTexture.vcScaleRatio.Y = scale_y;
 
 			rainbowTexture.Opacity = 255;
-			rainbowTexture.t2D描画(rainbow_x, rainbow_y);
+			rainbowTexture.t2DDraw(rainbow_x, rainbow_y);
 		}
 
 	}
@@ -274,7 +276,7 @@ class HGaugeMethods {
 				flashTexture.vcScaleRatio.Y = scale_y;
 
 				flashTexture.Opacity = Opacity;
-				flashTexture.t2D描画(x, y,
+				flashTexture.t2DDraw(x, y,
 					new Rectangle(
 						GaugeBox[0],
 						GaugeBox[1],
@@ -293,7 +295,7 @@ class HGaugeMethods {
 			killzoneTexture.vcScaleRatio.X = scale_x;
 			killzoneTexture.vcScaleRatio.Y = scale_y;
 
-			killzoneTexture.t2D描画(x, y,
+			killzoneTexture.t2DDraw(x, y,
 				new Rectangle(
 					GaugeBox[0],
 					GaugeBox[1],
@@ -317,9 +319,9 @@ class HGaugeMethods {
 
 		clearIcon.Opacity = 255;
 		if (highlight) {
-			clearIcon.t2D描画(text_x, text_y, clearRectHighlight);
+			clearIcon.t2DDraw(text_x, text_y, clearRectHighlight);
 		} else {
-			clearIcon.t2D描画(text_x, text_y, clearRect);
+			clearIcon.t2DDraw(text_x, text_y, clearRect);
 		}
 	}
 
@@ -335,7 +337,7 @@ class HGaugeMethods {
 			soulFire.vcScaleRatio.X = scale_x;
 			soulFire.vcScaleRatio.Y = scale_y;
 
-			soulFire.t2D描画(fire_x, fire_y, new Rectangle(soulfire_width * fireFrame, 0, soulfire_width, soulfire_height));
+			soulFire.t2DDraw(fire_x, fire_y, new Rectangle(soulfire_width * fireFrame, 0, soulfire_width, soulfire_height));
 		}
 	}
 
@@ -350,9 +352,9 @@ class HGaugeMethods {
 
 		int soul_height = soulLetter.szTextureSize.Height / 2;
 		if (tNormaCheck(diff, level, gaugeType, percent, 0)) {
-			soulLetter.t2D描画(soul_x, soul_y, new Rectangle(0, 0, soulLetter.szTextureSize.Width, soul_height));
+			soulLetter.t2DDraw(soul_x, soul_y, new Rectangle(0, 0, soulLetter.szTextureSize.Width, soul_height));
 		} else {
-			soulLetter.t2D描画(soul_x, soul_y, new Rectangle(0, soul_height, soulLetter.szTextureSize.Width, soul_height));
+			soulLetter.t2DDraw(soul_x, soul_y, new Rectangle(0, soul_height, soulLetter.szTextureSize.Width, soul_height));
 		}
 	}
 
@@ -409,18 +411,32 @@ class HGaugeMethods {
 
 	public static bool UNSAFE_FastNormaCheck(int player) {
 		var _dif = OpenTaiko.SongMount.nChoosenSongDifficulty[player];
+		EGaugeType gaugeType = tGetGaugeTypeEnum(player);
+		// a dan on the normal gauge is clear while neither the play nor an exam has failed, whatever the gauge value;
+		// after the play, its exams are the ones saved for the results
+		if (_dif == (int)Difficulty.Dan && gaugeType == EGaugeType.NORMAL) {
+			var actDan = OpenTaiko.stageGameScreen.actDan;
+			ReadOnlySpan<Dan_C> exams = actDan.IsDeActivated ? OpenTaiko.stageResults.stPlayRecord.Dan_C : actDan.GetExam();
+			return !OpenTaiko.stageGameScreen.IsStageFailed(player) && !Dan_Cert.GetFailedAllChallenges(exams, OpenTaiko.SongMount.rChoosenSong!.DanSongs);
+		}
 		return tNormaCheck(
 			(Difficulty)_dif,
-			OpenTaiko.SongMount.rChoosenSong.score[_dif]?.譜面情報.nレベル[_dif] ?? -1,
-			tGetGaugeTypeEnum(player),
-			(float)OpenTaiko.stageGameScreen.actGauge.db現在のゲージ値[player],
+			UNSAFE_PlayLevel(player),
+			gaugeType,
+			(float)OpenTaiko.stageGameScreen.actGauge.dbCurrentGaugeValue[player],
 			UNSAFE_KillZonePercent(player)
 		);
 	}
 
+	// the level the gauge rate and damage use: the chart's player-side LEVEL
+	private static int UNSAFE_PlayLevel(int player) => OpenTaiko.GetTJA(player)?.PlayerSideMetadata.LEVELtaiko ?? -1;
+
+	// the notes of the route the player is on, common notes included
+	private static int UNSAFE_RouteNotesCount(CTja dtx, int player) => dtx.nNotesCount_Branch[(int)OpenTaiko.stageGameScreen.nCurrentBranch[player]];
+
 	public static bool UNSAFE_IsRainbow(int player) {
 		if (tGetGaugeTypeEnum(player) != EGaugeType.NORMAL) return false;
-		return (float)OpenTaiko.stageGameScreen.actGauge.db現在のゲージ値[player] >= 100f;
+		return (float)OpenTaiko.stageGameScreen.actGauge.dbCurrentGaugeValue[player] >= 100f;
 	}
 
 	public static float UNSAFE_KillZonePercent(int player) {
@@ -428,12 +444,12 @@ class HGaugeMethods {
 
 		// Total hits and perfect hits
 		int perfectHits = OpenTaiko.stageGameScreen.CChartScore[player].nGreat;
-		int totalHits = dtx.nノーツ数_Common;
+		int totalHits = UNSAFE_RouteNotesCount(dtx, player);
 
 		// Difficulty
 		int _dif = OpenTaiko.SongMount.nChoosenSongDifficulty[player];
 		Difficulty difficulty = (Difficulty)_dif;
-		int level = OpenTaiko.SongMount.rChoosenSong.score[_dif]?.譜面情報.nレベル[_dif] ?? -1;
+		int level = UNSAFE_PlayLevel(player);
 
 		return tHardGaugeGetKillscreenRatio(
 			difficulty,
@@ -520,7 +536,7 @@ class HGaugeMethods {
 
 		// Total hits and perfect hits
 		int perfectHits = OpenTaiko.stageGameScreen.CChartScore[player].nGreat;
-		int totalHits = dtx.nノーツ数_Common;
+		int totalHits = UNSAFE_RouteNotesCount(dtx, player);
 
 		// Scale
 		float scale = 1.0f;
@@ -531,10 +547,10 @@ class HGaugeMethods {
 		// Difficulty
 		int _dif = OpenTaiko.SongMount.nChoosenSongDifficulty[player];
 		Difficulty difficulty = (Difficulty)_dif;
-		int level = OpenTaiko.SongMount.rChoosenSong.score[_dif]?.譜面情報.nレベル[_dif] ?? -1;
+		int level = UNSAFE_PlayLevel(player);
 
 		// Current percent
-		float currentPercent = (float)OpenTaiko.stageGameScreen.actGauge.db現在のゲージ値[player];
+		float currentPercent = (float)OpenTaiko.stageGameScreen.actGauge.dbCurrentGaugeValue[player];
 
 		// Gauge type
 		EGaugeType gaugeType = tGetGaugeTypeEnum(player);
@@ -590,7 +606,7 @@ class HGaugeMethods {
 
 		// Total hits and perfect hits
 		int perfectHits = OpenTaiko.stageGameScreen.CChartScore[player].nGreat;
-		int totalHits = dtx.nノーツ数_Common;
+		int totalHits = UNSAFE_RouteNotesCount(dtx, player);
 
 		// Gauge type
 		EGaugeType gaugeType = tGetGaugeTypeEnum(player);
@@ -607,7 +623,7 @@ class HGaugeMethods {
 		// Difficulty
 		int _dif = OpenTaiko.SongMount.nChoosenSongDifficulty[player];
 		Difficulty difficulty = (Difficulty)_dif;
-		int level = OpenTaiko.SongMount.rChoosenSong.score[_dif]?.譜面情報.nレベル[_dif] ?? -1;
+		int level = UNSAFE_PlayLevel(player);
 
 		int gauge_x;
 		int gauge_y;
@@ -721,6 +737,6 @@ class HGaugeMethods {
 
 	#endregion
 
-	private static int[] GaugeBox = { OpenTaiko.Skin.Game_Gauge_Rect[0], OpenTaiko.Skin.Game_Gauge_Rect[1], OpenTaiko.Skin.Game_Gauge_Rect[2], OpenTaiko.Skin.Game_Gauge_Rect[3] };
+	private static int[] GaugeBox = new int[4];
 
 }

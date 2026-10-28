@@ -1,5 +1,6 @@
 ﻿using System.Data;
 using System.Diagnostics;
+using System.Globalization;
 using Microsoft.Data.Sqlite;
 using Newtonsoft.Json;
 
@@ -7,7 +8,7 @@ namespace OpenTaiko;
 
 internal class DBSaves {
 	private static string _savesDBFilename = $@"Saves.db3";
-	private static string _savesDBPath = @$"{OpenTaiko.strEXEのあるフォルダ}{_savesDBFilename}";
+	private static string _savesDBPath = @$"{OpenTaiko.strEXEFolder}{_savesDBFilename}";
 	private static SqliteConnection SavesDBConnection = new SqliteConnection(@$"Data Source={_savesDBPath}");
 
 	private static string _DBNotFoundError = @$"The database {_savesDBFilename} was not found or the connection failed";
@@ -27,7 +28,7 @@ internal class DBSaves {
 	}
 
 	public static Int64 GetPlayerSaveId(int player) {
-		return OpenTaiko.SaveFileInstances[OpenTaiko.GetActualPlayer(player)].data.SaveId;
+		return OpenTaiko.SaveFileInstances[player].data.SaveId;
 	}
 
 	#region [Unlocked Dan Titles]
@@ -78,8 +79,8 @@ internal class DBSaves {
 
 	#region [Unlocked Nameplates]
 
-	public static List<int> FetchUnlockedNameplateIds(Int64 sid) {
-		List<int> _nps = new List<int>();
+	public static HashSet<string> FetchUnlockedNameplateIds(Int64 sid) {
+		HashSet<string> _nps = new HashSet<string>();
 		SqliteConnection? connection = GetSavesDBConnection();
 		if (connection == null) return _nps;
 
@@ -87,19 +88,21 @@ internal class DBSaves {
 		command.CommandText = @$"SELECT * FROM nameplate_titles WHERE SaveId={sid};";
 		SqliteDataReader reader = command.ExecuteReader();
 		while (reader.Read()) {
-			_nps.Add((int)(Int64)reader["NameplateId"]);
+			_nps.Add(Convert.ToString(reader["NameplateId"], CultureInfo.InvariantCulture) ?? "");
 		}
 		reader.Close();
 
 		return _nps;
 	}
 
-	public static void RegisterUnlockedNameplate(Int64 SaveId, Int64 NameplateId) {
+	public static void RegisterUnlockedNameplate(Int64 SaveId, string NameplateId) {
 		SqliteConnection? connection = GetSavesDBConnection();
 		if (connection == null) return;
 
 		var command = connection.CreateCommand();
-		command.CommandText = @$"INSERT INTO nameplate_titles(NameplateId,SaveId) VALUES({NameplateId}, {SaveId});";
+		command.CommandText = "INSERT OR IGNORE INTO nameplate_titles(NameplateId,SaveId) VALUES($id, $save);";
+		command.Parameters.AddWithValue("$id", NameplateId);
+		command.Parameters.AddWithValue("$save", SaveId);
 		command.ExecuteNonQuery();
 	}
 
@@ -149,12 +152,11 @@ internal class DBSaves {
 			SaveFile sf = new SaveFile();
 
 			sf.data.SaveId = (Int64)reader["SaveId"];
+			sf.data.SaveUID = reader["SaveUID"] as string ?? "";
 			sf.data.Name = (string)reader["PlayerName"];
-			sf.data.Title = (string)reader["PlayerNameplateTitle"];
 			sf.data.Dan = (string)reader["PlayerDanTitle"];
 			sf.data.DanGold = Convert.ToBoolean((Int64)reader["PlayerDanGold"]);
 			sf.data.DanType = (int)(Int64)reader["PlayerDanType"];
-			sf.data.TitleType = (int)(Int64)reader["PlayerNameplateType"];
 			sf.data.PuchiChara = (string)reader["PlayerPuchichara"];
 			sf.data.Character = (int)(Int64)reader["PlayerCharacter"];
 			sf.data.CharacterName = (string)reader["PlayerCharacterName"];
@@ -163,10 +165,11 @@ internal class DBSaves {
 			sf.data.TotalPlaycount = (int)(Int64)reader["TotalPlaycount"];
 			sf.data.AIBattleModePlaycount = (int)(Int64)reader["AIBattleModePlaycount"];
 			sf.data.AIBattleModeWins = (int)(Int64)reader["AIBattleModeWins"];
-			sf.data.TitleRarityInt = (int)(Int64)reader["PlayerNameplateRarityInt"];
-			sf.data.TitleId = (int)(Int64)reader["PlayerNameplateId"];
+			sf.data.TitleId = Convert.ToString(reader["PlayerNameplateId"], CultureInfo.InvariantCulture) ?? "";
+			sf.data.SelectedHitsounds = reader["SelectedHitsounds"] as string ?? "Taiko";
 			sf.tInitSaveFile();
 			sf.tLoadUnlockables();
+			OpenTaiko.Databases?.DBNameplateUnlockables?.tResolveNameplate(sf.data);
 
 			_instances[_file] = sf;
 			_file++;
@@ -199,6 +202,17 @@ internal class DBSaves {
 		command.ExecuteNonQuery();
 	}
 
+	public static void SetSelectedHitsounds(Int64 SaveId, string hitsoundName) {
+		SqliteConnection? connection = GetSavesDBConnection();
+		if (connection == null) return;
+
+		var command = connection.CreateCommand();
+		command.CommandText = $"""
+		UPDATE saves SET SelectedHitsounds = '{hitsoundName.EscapeSingleQuotes()}' WHERE SaveId = {SaveId};
+		""";
+		command.ExecuteNonQuery();
+	}
+
 	public static void ApplyChangesFromMyRoom(SaveFile File) {
 		SqliteConnection? connection = GetSavesDBConnection();
 		if (connection == null) return;
@@ -208,15 +222,12 @@ internal class DBSaves {
 		var command = connection.CreateCommand();
 		command.CommandText = $@" UPDATE saves SET
                 PlayerName = '{SaveData.Name.EscapeSingleQuotes()}',
-                PlayerNameplateTitle = '{SaveData.Title.EscapeSingleQuotes()}',
                 PlayerDanTitle = '{SaveData.Dan.EscapeSingleQuotes()}',
                 PlayerDanGold = {SaveData.DanGold},
                 PlayerDanType = {SaveData.DanType},
-                PlayerNameplateType = {SaveData.TitleType},
                 PlayerPuchichara = '{SaveData.PuchiChara.EscapeSingleQuotes()}',
                 PlayerCharacter = {SaveData.Character},
-                PlayerNameplateRarityInt = {SaveData.TitleRarityInt},
-                PlayerNameplateId = {SaveData.TitleId},
+                PlayerNameplateId = '{(SaveData.TitleId ?? "").EscapeSingleQuotes()}',
                 PlayerCharacterName = '{SaveData.CharacterName.EscapeSingleQuotes()}'
                 WHERE SaveId = {SaveData.SaveId};
             ;";
@@ -228,9 +239,13 @@ internal class DBSaves {
 	#region [global_counters Table]
 
 	public static Dictionary<string, double> GetGlobalCountersDict(Int64 saveId) {
-		Dictionary<string, double> _globalCounters = new Dictionary<string, double>();
 		SqliteConnection? connection = GetSavesDBConnection();
-		if (connection == null) return _globalCounters;
+		if (connection == null) return new Dictionary<string, double>();
+		return GetGlobalCountersDict(connection, saveId);
+	}
+
+	internal static Dictionary<string, double> GetGlobalCountersDict(SqliteConnection connection, Int64 saveId) {
+		Dictionary<string, double> _globalCounters = new Dictionary<string, double>();
 
 		var command = connection.CreateCommand();
 		command.CommandText =
@@ -253,26 +268,31 @@ internal class DBSaves {
 	public static void DBSetGlobalCounter(Int64 saveId, string counterName, double counterValue) {
 		SqliteConnection? connection = GetSavesDBConnection();
 		if (connection == null) return;
+		DBSetGlobalCounter(connection, saveId, counterName, counterValue);
+	}
 
-		var command = connection.CreateCommand();
-		command.CommandText =
-			@$"
-                BEGIN TRANSACTION;
+	// the name and value go in as parameters: a quote in the name or a culture's decimal comma can't break the SQL
+	internal static void DBSetGlobalCounter(SqliteConnection connection, Int64 saveId, string counterName, double counterValue) {
+		using var transaction = connection.BeginTransaction();
+		using var command = connection.CreateCommand();
+		command.Transaction = transaction;
+		command.CommandText = """
+			UPDATE global_counters
+			SET CounterValue = $value
+			WHERE CounterName = $name AND SaveId = $save;
 
-				UPDATE global_counters
-				SET CounterValue = {counterValue}
-				WHERE CounterName = '{counterName}' AND SaveId = {saveId};
-
-				INSERT INTO global_counters (CounterName, SaveId, CounterValue)
-				SELECT '{counterName}', {saveId}, {counterValue}
-				WHERE NOT EXISTS (
-					SELECT 1 FROM global_counters
-					WHERE CounterName = '{counterName}' AND SaveId = {saveId}
-				);
-
-				COMMIT;
-            ";
+			INSERT INTO global_counters (CounterName, SaveId, CounterValue)
+			SELECT $name, $save, $value
+			WHERE NOT EXISTS (
+				SELECT 1 FROM global_counters
+				WHERE CounterName = $name AND SaveId = $save
+			);
+			""";
+		command.Parameters.AddWithValue("$name", counterName);
+		command.Parameters.AddWithValue("$save", saveId);
+		command.Parameters.AddWithValue("$value", counterValue);
 		command.ExecuteNonQuery();
+		transaction.Commit();
 	}
 
 
@@ -281,9 +301,13 @@ internal class DBSaves {
 	#region [active_triggers Table]
 
 	public static HashSet<string> GetActiveTriggersSet(Int64 saveId) {
-		HashSet<string> _activeTriggers = new HashSet<string>();
 		SqliteConnection? connection = GetSavesDBConnection();
-		if (connection == null) return _activeTriggers;
+		if (connection == null) return new HashSet<string>();
+		return GetActiveTriggersSet(connection, saveId);
+	}
+
+	internal static HashSet<string> GetActiveTriggersSet(SqliteConnection connection, Int64 saveId) {
+		HashSet<string> _activeTriggers = new HashSet<string>();
 
 		var command = connection.CreateCommand();
 		command.CommandText =
@@ -305,24 +329,60 @@ internal class DBSaves {
 	public static void DBToggleGlobalTrigger(Int64 saveId, string triggerName, bool triggerValue) {
 		SqliteConnection? connection = GetSavesDBConnection();
 		if (connection == null) return;
+		DBToggleGlobalTrigger(connection, saveId, triggerName, triggerValue);
+	}
 
-		var command = connection.CreateCommand();
-		if (triggerValue) {
-			command.CommandText =
-			@$"
-                    INSERT INTO active_triggers (Trigger, SaveId)
-					SELECT '{triggerName}', {saveId}
-					WHERE NOT EXISTS (
-						SELECT 1 FROM active_triggers WHERE Trigger='{triggerName}' AND SaveId={saveId}
-					);
-                ";
-		} else {
-			command.CommandText =
-			@$"
-                    DELETE FROM active_triggers
-					WHERE Trigger='{triggerName}' AND SaveId={saveId};
-                ";
-		}
+	internal static void DBToggleGlobalTrigger(SqliteConnection connection, Int64 saveId, string triggerName, bool triggerValue) {
+		using var command = connection.CreateCommand();
+		command.CommandText = triggerValue
+			? """
+				INSERT INTO active_triggers (Trigger, SaveId)
+				SELECT $name, $save
+				WHERE NOT EXISTS (
+					SELECT 1 FROM active_triggers WHERE Trigger = $name AND SaveId = $save
+				);
+				"""
+			: "DELETE FROM active_triggers WHERE Trigger = $name AND SaveId = $save;";
+		command.Parameters.AddWithValue("$name", triggerName);
+		command.Parameters.AddWithValue("$save", saveId);
+		command.ExecuteNonQuery();
+	}
+
+	#endregion
+
+	#region [global_strings Table]
+
+	public static Dictionary<string, string> GetGlobalStringsDict(Int64 saveId) {
+		SqliteConnection? connection = GetSavesDBConnection();
+		if (connection == null) return new Dictionary<string, string>();
+		return GetGlobalStringsDict(connection, saveId);
+	}
+
+	internal static Dictionary<string, string> GetGlobalStringsDict(SqliteConnection connection, Int64 saveId) {
+		var strings = new Dictionary<string, string>();
+		using var command = connection.CreateCommand();
+		command.CommandText = "SELECT StringName, StringValue FROM global_strings WHERE SaveId = $save;";
+		command.Parameters.AddWithValue("$save", saveId);
+		using var reader = command.ExecuteReader();
+		while (reader.Read()) strings[reader.GetString(0)] = reader.GetString(1);
+		return strings;
+	}
+
+	public static void DBSetGlobalString(Int64 saveId, string stringName, string stringValue) {
+		SqliteConnection? connection = GetSavesDBConnection();
+		if (connection == null) return;
+		DBSetGlobalString(connection, saveId, stringName, stringValue);
+	}
+
+	internal static void DBSetGlobalString(SqliteConnection connection, Int64 saveId, string stringName, string stringValue) {
+		using var command = connection.CreateCommand();
+		command.CommandText = """
+			INSERT INTO global_strings (StringName, SaveId, StringValue) VALUES ($name, $save, $value)
+			ON CONFLICT (SaveId, StringName) DO UPDATE SET StringValue = excluded.StringValue;
+			""";
+		command.Parameters.AddWithValue("$name", stringName);
+		command.Parameters.AddWithValue("$save", saveId);
+		command.Parameters.AddWithValue("$value", stringValue);
 		command.ExecuteNonQuery();
 	}
 
@@ -386,12 +446,15 @@ internal class DBSaves {
 		SqliteConnection? connection = GetSavesDBConnection();
 		if (connection == null) return false;
 
-		SaveFile.Data saveData = OpenTaiko.SaveFileInstances[OpenTaiko.GetActualPlayer(player)].data;
+		SaveFile.Data saveData = OpenTaiko.SaveFileInstances[player].data;
 		BestPlayRecords.CBestPlayRecord currentPlay = new BestPlayRecords.CBestPlayRecord();
 		var choosenSong = OpenTaiko.SongMount.rChoosenSong;
 		var choosenDifficulty = OpenTaiko.SongMount.nChoosenSongDifficulty[player];
 		var chartScore = OpenTaiko.stageGameScreen.CChartScore[player];
 		List<int>[] danResults = new List<int>[7] { new List<int>(), new List<int>(), new List<int>(), new List<int>(), new List<int>(), new List<int>(), new List<int>() };
+
+		// Do not register plays for DanBuilder charts (no persistent unique ID)
+		if (choosenSong.uniqueId == null) return false;
 
 		// Do not register the play if Dan/Tower and any mod is ON
 		if ((choosenDifficulty == (int)Difficulty.Tower || choosenDifficulty == (int)Difficulty.Dan) && !ModIcons.tPlayIsStock(player)) return false;
@@ -405,7 +468,7 @@ internal class DBSaves {
 			currentPlay.Artist = choosenSong.ldSubtitle.GetString(""); // There is no direct Artist tag on the .tja format, so we directly use the subtitle as a guess
 			currentPlay.PlayMods = ModIcons.tModsToPlayModsFlags(player);
 			currentPlay.ChartDifficulty = choosenDifficulty;
-			currentPlay.ChartLevel = choosenSong.score[choosenDifficulty].譜面情報.nレベル[choosenDifficulty];
+			currentPlay.ChartLevel = choosenSong.score[choosenDifficulty].ChartInfo.nLevel[choosenDifficulty];
 			currentPlay.ClearStatus = clearStatus;
 			currentPlay.ScoreRank = scoreRank;
 			currentPlay.HighScore = chartScore.nScore;
@@ -424,7 +487,7 @@ internal class DBSaves {
 			currentPlay.HighScoreGoodCount = chartScore.nGreat;
 			currentPlay.HighScoreOkCount = chartScore.nGood;
 			currentPlay.HighScoreBadCount = chartScore.nMiss;
-			currentPlay.HighScoreMaxCombo = OpenTaiko.stageGameScreen.actCombo.nCurrentCombo.最高値[player];
+			currentPlay.HighScoreMaxCombo = OpenTaiko.stageGameScreen.actCombo.nCurrentCombo.MaxValue[player];
 			currentPlay.HighScoreRollCount = chartScore.nRoll;
 			currentPlay.HighScoreADLibCount = chartScore.nADLIB;
 			currentPlay.HighScoreBoomCount = chartScore.nMine;

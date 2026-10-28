@@ -1,0 +1,185 @@
+# Builds the Android host (OpenTaiko.Android) into a sideloadable APK on a Linux runner.
+# Desktop releases stay in autobuild.yaml; this workflow only publishes the APK as an artifact.
+#
+# What an Android build actually needs, all of it non-obvious (see OpenTaiko.Android/README.md):
+#   - .NET 8 SDK + the `android` workload, JDK 17, and an Android SDK whose platform/build-tools match
+#     what the workload's Microsoft.Android.Sdk compiles against.
+#   - natives and the FFmpeg binding source that are NOT in git: OpenTaiko.Android/jniLibs/ and
+#     third_party/FFmpeg.AutoGen/upstream/ are gitignored, so every clean run must fetch them (the
+#     fetch scripts pin the versions).
+#   - -p:UseVendoredFFmpeg=true globally, and -p:Optimize=false for Release: the csproj errors without
+#     them because the NuGet FFmpeg.AutoGen throws on Android and csc-optimized IL crashes the Mono
+#     interpreter at boot.
+#   - the Android csproj directly, never OpenTaiko.sln: OpenTaiko.iOS targets net10.0-ios, which a
+#     .NET 8 runner cannot build.
+#   - only committed game data: Config.ini and several skin/character folders are gitignored, so a CI
+#     APK ships fewer skins than a dev-machine one. Players get the rest through the Hub or the
+#     in-app soundtrack download.
+
+name: Build OpenTaiko Android
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  # Bumped together with the .NET android workload if it ever needs a newer platform.
+  ANDROID_PLATFORM: android-34
+  ANDROID_BUILD_TOOLS: 34.0.0
+
+jobs:
+  android:
+    name: Release APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      # The runner images ship newer SDKs, and without a global.json `dotnet` resolves to the highest
+      # one — which would install that band's android workload (wanting a newer platform than the one
+      # provisioned below) while this project is net8.0-android. Pin the band for this job only;
+      # rollForward keeps it on whichever 8.0.x setup-dotnet installed.
+      - name: Pin the SDK band to 8.0 for this job
+        run: |
+          set -euo pipefail
+          printf '{\n  "sdk": { "version": "8.0.100", "rollForward": "latestMinor" }\n}\n' > global.json
+          dotnet --version
+
+      # The ubuntu runner images ship the Android SDK (ANDROID_HOME=/usr/local/lib/android/sdk) with
+      # cmdline-tools, so no extra provisioning action is needed — just pin the packages this workload
+      # compiles against.
+      - name: Locate the preinstalled Android SDK
+        id: sdk
+        run: |
+          set -euo pipefail
+          sdk="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          test -d "$sdk" || { echo "No Android SDK on the runner (ANDROID_HOME=$ANDROID_HOME)" >&2; exit 1; }
+          sdkmanager="$(find "$sdk/cmdline-tools" -path '*/bin/sdkmanager' -type f | head -1)"
+          test -n "$sdkmanager" || { echo "sdkmanager not found under $sdk/cmdline-tools" >&2; exit 1; }
+          echo "ANDROID_HOME=$sdk" >> "$GITHUB_ENV"
+          {
+            echo "root=$sdk"
+            echo "sdkmanager=$sdkmanager"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Install platform and build-tools
+        run: |
+          set -euo pipefail
+          yes | "${{ steps.sdk.outputs.sdkmanager }}" --sdk_root="${{ steps.sdk.outputs.root }}" --licenses > /dev/null
+          "${{ steps.sdk.outputs.sdkmanager }}" --sdk_root="${{ steps.sdk.outputs.root }}" --install \
+            "platform-tools" "platforms;${ANDROID_PLATFORM}" "build-tools;${ANDROID_BUILD_TOOLS}"
+
+      - name: Install the .NET Android workload
+        run: dotnet workload install android
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: android-nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            android-nuget-${{ runner.os }}-
+
+      - name: Cache fetched natives and FFmpeg binding source
+        uses: actions/cache@v4
+        # Keyed on the fetch scripts: they pin the versions, so a changed script means new bits.
+        with:
+          path: |
+            OpenTaiko.Android/jniLibs
+            third_party/FFmpeg.AutoGen/upstream
+          key: android-natives-${{ hashFiles('OpenTaiko.Android/scripts/download-bass.sh', 'OpenTaiko.Android/scripts/download-ffmpeg.sh', 'OpenTaiko.iOS/scripts/fetch-ffmpeg-autogen.sh') }}
+
+      # fetch-ffmpeg-autogen.sh is the iOS one on purpose: it applies the iOS *and* Android patches to
+      # the shared third_party/ checkout, which is exactly what the Android csproj requires.
+      - name: Fetch BASS and FFmpeg natives and the FFmpeg.AutoGen source
+        run: |
+          set -euo pipefail
+          bash OpenTaiko.Android/scripts/download-bass.sh
+          bash OpenTaiko.Android/scripts/download-ffmpeg.sh
+          bash OpenTaiko.iOS/scripts/fetch-ffmpeg-autogen.sh
+
+      - name: Verify prerequisites before the long build
+        run: |
+          set -euo pipefail
+          for abi in arm64-v8a x86_64; do
+            for so in libbass.so libbassmix.so libbass_fx.so \
+                      libavutil.so libavcodec.so libavformat.so libswscale.so libswresample.so; do
+              test -f "OpenTaiko.Android/jniLibs/$abi/$so" || { echo "missing $abi/$so" >&2; exit 1; }
+            done
+          done
+          test -f third_party/FFmpeg.AutoGen/upstream/FFmpeg.cs || { echo "missing FFmpeg.AutoGen upstream source" >&2; exit 1; }
+
+      - name: Build Release APK
+        run: |
+          set -euo pipefail
+          dotnet build OpenTaiko.Android/OpenTaiko.Android.csproj \
+            --configuration Release \
+            --framework net8.0-android \
+            -p:UseVendoredFFmpeg=true \
+            -p:Optimize=false \
+            -p:AndroidSdkDirectory="${ANDROID_HOME}" \
+            -p:JavaSdkDirectory="${JAVA_HOME}"
+
+      # An AndroidNativeLibrary/AndroidAsset wildcard that matches nothing still packages happily and
+      # then aborts at boot, so the APK contents are asserted rather than trusted.
+      - name: Check what actually landed in the APK
+        run: |
+          set -euo pipefail
+          apk="$(find OpenTaiko.Android/bin/Release/net8.0-android -maxdepth 1 -name '*-Signed.apk' | head -1)"
+          test -n "$apk" || { echo "No APK produced under OpenTaiko.Android/bin/Release/net8.0-android" >&2; exit 1; }
+          echo "APK: $apk ($(wc -c < "$apk") bytes)"
+          unzip -l "$apk" | awk '{print $NF}' > "$RUNNER_TEMP/apk-entries.txt"
+          for required in lib/arm64-v8a/libbass.so lib/arm64-v8a/libavcodec.so classes.dex AndroidManifest.xml; do
+            grep -qx "$required" "$RUNNER_TEMP/apk-entries.txt" || { echo "APK is missing $required" >&2; exit 1; }
+          done
+          assets="$(grep -c '^assets/' "$RUNNER_TEMP/apk-entries.txt" || true)"
+          echo "assets/ entries in APK: $assets"
+          test "$assets" -ge 100 || { echo "APK carries almost no game data — the asset globs did not match" >&2; exit 1; }
+
+      - name: Stage the APK
+        id: stage
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's:.*<ApplicationDisplayVersion>\(.*\)</ApplicationDisplayVersion>.*:\1:p' \
+            OpenTaiko.Android/OpenTaiko.Android.csproj | head -1)"
+          apk="$(find OpenTaiko.Android/bin/Release/net8.0-android -maxdepth 1 -name '*-Signed.apk' | head -1)"
+          out="${RUNNER_TEMP}/OpenTaiko.Android-${version}-signed.apk"
+          cp "$apk" "$out"
+          {
+            echo "path=$out"
+            echo "name=OpenTaiko.Android-${version}-${GITHUB_SHA::8}"
+          } >> "$GITHUB_OUTPUT"
+
+      # Debug-signed (the workload's default keystore): fine for sideloading and testing. Play Store
+      # needs a real keystore, wired through AndroidKeyStore / AndroidKeystoreFile / Password secrets.
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.stage.outputs.name }}
+          path: ${{ steps.stage.outputs.path }}
+          if-no-files-found: error
