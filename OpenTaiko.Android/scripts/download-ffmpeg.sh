@@ -59,10 +59,12 @@ extract_abi() {
 
 mkdir -p "$JNI_DIR"
 for entry in "${ABIS[@]}"; do
-  extract_abi "${entry%%|*}" "${entry#*|}"
+  IFS='|' read -r classifier abi <<< "$entry"
+  extract_abi "$classifier" "$abi"
 done
 
-for abi in "${ABIS[@]}"; do
+for entry in "${ABIS[@]}"; do
+  IFS='|' read -r classifier abi <<< "$entry"
   for name in "${WANTED[@]}"; do
     if [[ ! -f "$JNI_DIR/$abi/$name" ]]; then
       echo "[download-ffmpeg] ERROR: $abi/$name missing" >&2

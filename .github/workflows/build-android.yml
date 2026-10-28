@@ -79,7 +79,7 @@ jobs:
           set -euo pipefail
           sdk="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
           test -d "$sdk" || { echo "No Android SDK on the runner (ANDROID_HOME=$ANDROID_HOME)" >&2; exit 1; }
-          sdkmanager="$(find "$sdk/cmdline-tools" -path '*/bin/sdkmanager' -type f | head -1)"
+          sdkmanager="$(find "$sdk/cmdline-tools" -path '*/bin/sdkmanager' -type f | head -1 || true)"
           test -n "$sdkmanager" || { echo "sdkmanager not found under $sdk/cmdline-tools" >&2; exit 1; }
           echo "ANDROID_HOME=$sdk" >> "$GITHUB_ENV"
           {
@@ -90,9 +90,18 @@ jobs:
       - name: Install platform and build-tools
         run: |
           set -euo pipefail
-          yes | "${{ steps.sdk.outputs.sdkmanager }}" --sdk_root="${{ steps.sdk.outputs.root }}" --licenses > /dev/null
-          "${{ steps.sdk.outputs.sdkmanager }}" --sdk_root="${{ steps.sdk.outputs.root }}" --install \
+          sdkmanager="${{ steps.sdk.outputs.sdkmanager }}"
+          root="${{ steps.sdk.outputs.root }}"
+          # Best-effort by design: sdkmanager closes the pipe the moment it is done, so `yes` dies on
+          # EPIPE and pipefail would turn a successful license acceptance into a false failure. Whether
+          # the packages actually landed is asserted below instead.
+          yes | "$sdkmanager" --sdk_root="$root" --licenses > /dev/null || true
+          "$sdkmanager" --sdk_root="$root" --install \
             "platform-tools" "platforms;${ANDROID_PLATFORM}" "build-tools;${ANDROID_BUILD_TOOLS}"
+          test -f "$root/platforms/${ANDROID_PLATFORM}/android.jar" ||
+            { echo "platforms/${ANDROID_PLATFORM}/android.jar missing" >&2; exit 1; }
+          test -d "$root/build-tools/${ANDROID_BUILD_TOOLS}" ||
+            { echo "build-tools/${ANDROID_BUILD_TOOLS} missing" >&2; exit 1; }
 
       - name: Install the .NET Android workload
         run: dotnet workload install android
@@ -150,7 +159,7 @@ jobs:
       - name: Check what actually landed in the APK
         run: |
           set -euo pipefail
-          apk="$(find OpenTaiko.Android/bin/Release/net8.0-android -maxdepth 1 -name '*-Signed.apk' | head -1)"
+          apk="$(find OpenTaiko.Android/bin/Release/net8.0-android -maxdepth 1 -name '*-Signed.apk' 2>/dev/null | head -1 || true)"
           test -n "$apk" || { echo "No APK produced under OpenTaiko.Android/bin/Release/net8.0-android" >&2; exit 1; }
           echo "APK: $apk ($(wc -c < "$apk") bytes)"
           unzip -l "$apk" | awk '{print $NF}' > "$RUNNER_TEMP/apk-entries.txt"
@@ -166,8 +175,9 @@ jobs:
         run: |
           set -euo pipefail
           version="$(sed -n 's:.*<ApplicationDisplayVersion>\(.*\)</ApplicationDisplayVersion>.*:\1:p' \
-            OpenTaiko.Android/OpenTaiko.Android.csproj | head -1)"
-          apk="$(find OpenTaiko.Android/bin/Release/net8.0-android -maxdepth 1 -name '*-Signed.apk' | head -1)"
+            OpenTaiko.Android/OpenTaiko.Android.csproj | head -1 || true)"
+          test -n "$version" || { echo "ApplicationDisplayVersion not found in OpenTaiko.Android.csproj" >&2; exit 1; }
+          apk="$(find OpenTaiko.Android/bin/Release/net8.0-android -maxdepth 1 -name '*-Signed.apk' 2>/dev/null | head -1 || true)"
           out="${RUNNER_TEMP}/OpenTaiko.Android-${version}-signed.apk"
           cp "$apk" "$out"
           {

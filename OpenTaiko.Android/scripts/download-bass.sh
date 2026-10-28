@@ -47,7 +47,7 @@ download_package() {
 
   for abi in "${ABIS[@]}"; do
     # un4seen zips carry the NDK layout (libs/<abi>/*.so); some nest it another level down.
-    src="$(find "$tmpdir/unpacked" -type d -name "$abi" | head -1)"
+    src="$(find "$tmpdir/unpacked" -type d -name "$abi" | head -1 || true)"
     if [[ -z "$src" ]]; then
       echo "[download-bass] ERROR: $name has no $abi directory" >&2
       return 1
