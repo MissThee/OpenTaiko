@@ -1309,14 +1309,13 @@ internal abstract partial class CStagePlayScreenCommon : CStage {
 			return;
 
 		long msLastHit = long.MinValue;
-		double msAllowedLastHit = double.BitDecrement(pChip.end.nSoundTimems);
 		for (int i = 0; i < nHits; ++i) {
-			var msHit = Math.Min(msFirstHit + i * msPerRollTja, msAllowedLastHit);
-			bool didHit = (long.CreateSaturating(msHit) == msLastHit) ? !pChip.bHit && this.AutoplayDoHit(pChip, msHit, iPlayer, gt)
-				: this.AutoplayTryHit(pChip, msHit, iPlayer, gt);
+			long msHit = Math.Min((long)(msFirstHit + i * msPerRollTja), pChip.end.nSoundTimems - 1);
+			bool didHit = (msHit == msLastHit) ? !pChip.bHit && this.AutoplayDoHit(pChip, Math.Min(msHit, pChip.end.nSoundTimems - 1), iPlayer, gt)
+				: this.AutoplayTryHit(pChip, Math.Min(msHit, pChip.end.nSoundTimems - 1), iPlayer, gt);
 			if (!(didHit && this.WithinInputFrame(uncappedSpeed)))
 				break;
-			msLastHit = long.CreateSaturating(msHit);
+			msLastHit = msHit;
 		}
 		pChip.msAutoLastHit = msFirstHit + (nHits - 1) * msPerRollTja;
 	}
@@ -1362,19 +1361,18 @@ internal abstract partial class CStagePlayScreenCommon : CStage {
 			return;
 
 		long msLastHit = long.MinValue;
-		double msAllowedLastHit = double.BitDecrement(pChip.end.nSoundTimems);
 		for (int i = 0; i < nHits; ++i) {
 			// the fuse dice is rolled once, before the final hit, however many hits this call makes
 			if (NotesManager.IsFuzeRoll(pChip) && pChip.nBalloon - pChip.nRollCount == 1 && this.CanAutoplayHitMine(iPlayer, true)) {
 				pChip.msAutoLastHit = double.PositiveInfinity; // prevent clearing fuze
 				return;
 			}
-			var msHit = Math.Min(msFirstHit + i * msPerRollTja, msAllowedLastHit);
-			bool didHit = (long.CreateSaturating(msHit) == msLastHit) ? !pChip.bHit && this.AutoplayDoHit(pChip, msHit, iPlayer, gt)
-				: this.AutoplayTryHit(pChip, msHit, iPlayer, gt);
+			long msHit = Math.Min((long)(msFirstHit + i * msPerRollTja), pChip.end.nSoundTimems - 1);
+			bool didHit = (msHit == msLastHit) ? !pChip.bHit && this.AutoplayDoHit(pChip, Math.Min(msHit, pChip.end.nSoundTimems - 1), iPlayer, gt)
+				: this.AutoplayTryHit(pChip, Math.Min(msHit, pChip.end.nSoundTimems - 1), iPlayer, gt);
 			if (!(didHit && this.WithinInputFrame()))
 				break;
-			msLastHit = long.CreateSaturating(msHit);
+			msLastHit = msHit;
 		}
 		pChip.msAutoLastHit = msFirstHit + (nHits - 1) * msPerRollTja;
 	}

@@ -17,6 +17,26 @@ powershell -ExecutionPolicy Bypass -File OpenTaiko.Android/scripts/build.ps1 -In
 powershell -ExecutionPolicy Bypass -File OpenTaiko.Android/scripts/build.ps1 -Run        # + launch it
 ```
 
+On Linux/macOS (and in CI) the prerequisite fetchers exist as shell scripts instead of PowerShell, and
+the build is a plain `dotnet build` — `ANDROID_HOME`/`JAVA_HOME` come from the SDK and the JDK 17 you
+have installed:
+
+```
+bash OpenTaiko.Android/scripts/download-bass.sh
+bash OpenTaiko.Android/scripts/download-ffmpeg.sh
+bash OpenTaiko.iOS/scripts/fetch-ffmpeg-autogen.sh   # shared: applies the iOS *and* Android patches
+
+dotnet build OpenTaiko.Android/OpenTaiko.Android.csproj -f net8.0-android -c Release \
+  -p:UseVendoredFFmpeg=true -p:Optimize=false \
+  -p:AndroidSdkDirectory="$ANDROID_HOME" -p:JavaSdkDirectory="$JAVA_HOME"
+```
+
+`.github/workflows/build-android.yml` is that sequence automated: it provisions JDK 17, the .NET 8
+`android` workload and the Android SDK platform/build-tools, fetches and caches the natives, builds
+the Release APK, asserts that the APK really contains the natives and the game assets, and uploads it
+as a workflow artifact (debug-signed, so sideloadable but not Play-Store uploadable). Build the csproj
+directly, never `OpenTaiko.sln` — `OpenTaiko.iOS` targets `net10.0-ios` and fails on a .NET 8 runner.
+
 **Songs — how players get them:** the APK ships without songs. On first launch (right after
 asset extraction) the app offers to download the official soundtrack from the OpenTaiko-Soundtrack
 GitHub repo straight into `files/Songs`. The repo's `soundtrack_info.json` (the Hub's index)
@@ -58,6 +78,11 @@ Two hard-won build rules the script enforces (guard targets error if violated):
 - Assemblies are embedded in every APK (`EmbedAssembliesIntoApk=true`): Debug otherwise relies on
   ".NET fast deployment" and a hand-installed Debug APK aborts with "No assemblies found".
 
+The csproj adds a third guard on its own, for the case a script can't help with: it refuses to build
+when `jniLibs/arm64-v8a/` has no `libbass.so` / `libavcodec.so`. Those directories are gitignored, so a
+fresh clone (CI above all) can reach the project with no natives at all — and a wildcard item that
+matches nothing packages happily anyway, producing an APK that aborts at boot.
+
 ### Manual steps (what build.ps1 automates)
 
 1. BASS natives: `powershell -ExecutionPolicy Bypass -File scripts/download-bass.ps1`
@@ -67,6 +92,10 @@ Two hard-won build rules the script enforces (guard targets error if violated):
 3. FFmpeg.AutoGen binding source: `powershell -ExecutionPolicy Bypass -File scripts/fetch-ffmpeg-autogen.ps1`
    (fetches + patches the vendored binding under `third_party/FFmpeg.AutoGen/upstream/`;
    the stock NuGet binding throws `PlatformNotSupportedException` on Android — see the README there).
+
+Steps 1 and 2 have `download-bass.sh` / `download-ffmpeg.sh` counterparts for Linux/macOS (same pinned
+versions, same skip-if-present behavior); step 3 is served by the shared
+`OpenTaiko.iOS/scripts/fetch-ffmpeg-autogen.sh`, which applies both mobile patches.
 
 The launcher icons under `Resources/mipmap-*` are generated from `OpenTaiko/OpenTaiko.ico` by
 `py -3 scripts/make-appicons.py` (Pillow required) — rerun it only when the logo changes.
