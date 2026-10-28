@@ -1218,8 +1218,11 @@ internal abstract partial class CStagePlayScreenCommon : CStage {
 		}
 		if (!hitAny)
 			this.AutoplaySwitchHand(iPlayer); // cancel hand switching
-		// prevent further hit attempt (unless waiting or overridden)
-		chip.msAutoLastHit = double.PositiveInfinity;
+		// prevent further hit attempt (unless waiting or overridden). msAutoLastHit and msFirstMultiHit are one field:
+		// writing it drops the note out of its two-hand wait, and nothing resolves a wait that ended: AutoJudge would
+		// miss the note while it still holds only one of its two hits.
+		if (chip.eNoteState != ENoteState.Wait)
+			chip.msAutoLastHit = double.PositiveInfinity;
 		return hitAny;
 	}
 
@@ -1309,15 +1312,21 @@ internal abstract partial class CStagePlayScreenCommon : CStage {
 			return;
 
 		long msLastHit = long.MinValue;
+		double msSchedule = pChip.msAutoLastHit; // the slot of the last hit actually made
 		for (int i = 0; i < nHits; ++i) {
 			long msHit = Math.Min((long)(msFirstHit + i * msPerRollTja), pChip.end.nSoundTimems - 1);
 			bool didHit = (msHit == msLastHit) ? !pChip.bHit && this.AutoplayDoHit(pChip, Math.Min(msHit, pChip.end.nSoundTimems - 1), iPlayer, gt)
 				: this.AutoplayTryHit(pChip, Math.Min(msHit, pChip.end.nSoundTimems - 1), iPlayer, gt);
-			if (!(didHit && this.WithinInputFrame(uncappedSpeed)))
+			if (!didHit)
 				break;
+			// The slots whose hit was not made stay owed: advancing the schedule past them loses them for good, which is
+			// how auto-rolls dropped hits, even all the rest of the roll when the speed is uncapped.
+			msSchedule = msFirstHit + i * msPerRollTja;
 			msLastHit = msHit;
+			if (!this.WithinInputFrame(uncappedSpeed))
+				break;
 		}
-		pChip.msAutoLastHit = msFirstHit + (nHits - 1) * msPerRollTja;
+		pChip.msAutoLastHit = msSchedule;
 	}
 
 	protected void AutorollBalloon(CChip pChip, double msTjaTime, int iPlayer, EGameType gt) {
@@ -1361,6 +1370,7 @@ internal abstract partial class CStagePlayScreenCommon : CStage {
 			return;
 
 		long msLastHit = long.MinValue;
+		double msSchedule = pChip.msAutoLastHit; // the slot of the last hit actually made
 		for (int i = 0; i < nHits; ++i) {
 			// the fuse dice is rolled once, before the final hit, however many hits this call makes
 			if (NotesManager.IsFuzeRoll(pChip) && pChip.nBalloon - pChip.nRollCount == 1 && this.CanAutoplayHitMine(iPlayer, true)) {
@@ -1370,11 +1380,14 @@ internal abstract partial class CStagePlayScreenCommon : CStage {
 			long msHit = Math.Min((long)(msFirstHit + i * msPerRollTja), pChip.end.nSoundTimems - 1);
 			bool didHit = (msHit == msLastHit) ? !pChip.bHit && this.AutoplayDoHit(pChip, Math.Min(msHit, pChip.end.nSoundTimems - 1), iPlayer, gt)
 				: this.AutoplayTryHit(pChip, Math.Min(msHit, pChip.end.nSoundTimems - 1), iPlayer, gt);
-			if (!(didHit && this.WithinInputFrame()))
+			if (!didHit)
 				break;
+			msSchedule = msFirstHit + i * msPerRollTja; // see AutorollRoll: a slot whose hit failed is retried, not skipped
 			msLastHit = msHit;
+			if (!this.WithinInputFrame())
+				break;
 		}
-		pChip.msAutoLastHit = msFirstHit + (nHits - 1) * msPerRollTja;
+		pChip.msAutoLastHit = msSchedule;
 	}
 
 	protected void PlayHitNoteSound(int iPlayer, NotesManager.EInputType input, double msTjaTime) {

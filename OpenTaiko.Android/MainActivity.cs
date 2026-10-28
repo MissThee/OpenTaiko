@@ -47,6 +47,7 @@ public class MainActivity : Activity, ISurfaceHolderCallback {
 	private volatile bool _paused;           // activity paused → loop idles
 	private volatile bool _surfaceReady;
 	private volatile int _surfaceW, _surfaceH;
+	private volatile Surface? _surface;   // live SurfaceView surface, captured inside surfaceCreated
 	private readonly ConcurrentQueue<Action> _renderActions = new();   // host actions on the GL thread
 	private readonly AutoResetEvent _wake = new(false);
 
@@ -109,6 +110,10 @@ public class MainActivity : Activity, ISurfaceHolderCallback {
 
 	// ── surface lifecycle ────────────────────────────────────────────────────────────────────────
 	public void SurfaceCreated(ISurfaceHolder holder) {
+		// Read the Surface exactly here: SurfaceHolder.getSurface() throws "Make sure the SurfaceView
+		// or associated SurfaceHolder has a valid Surface" once the surface is gone, and this callback
+		// is the only place it is guaranteed alive. The render thread waits on _surface instead.
+		_surface = holder.Surface!;
 		_surfaceReady = true;
 		if (_renderThread == null) {
 			_running = true;
@@ -116,8 +121,9 @@ public class MainActivity : Activity, ISurfaceHolderCallback {
 			_renderThread.Start();
 		} else {
 			// Surface came back after backgrounding: rebuild the EGL window surface on the GL thread.
+			Surface surface = _surface!;
 			_renderActions.Enqueue(() => {
-				_glContext?.CreateWindowSurface(_surfaceView!.Holder!.Surface!);
+				_glContext?.CreateWindowSurface(surface);
 				_glContext?.MakeCurrent();
 			});
 		}
@@ -132,12 +138,28 @@ public class MainActivity : Activity, ISurfaceHolderCallback {
 
 	public void SurfaceDestroyed(ISurfaceHolder holder) {
 		_surfaceReady = false;
+		_surface = null;
 		// Park the context on a pbuffer so GL resources survive; block until done so Android can
 		// safely release the Surface after this callback returns.
 		using var done = new ManualResetEventSlim(false);
 		_renderActions.Enqueue(() => { _glContext?.ParkContext(); done.Set(); });
 		_wake.Set();
 		done.Wait(TimeSpan.FromSeconds(3));
+	}
+
+	/// <summary>
+	/// The Surface to build the initial EGL window surface from. Bring-up can outlive the surface that
+	/// started it — first launch extracts thousands of asset files and may then sit on the soundtrack
+	/// download prompt, during which the screen can time out or the user can switch apps — so wait for
+	/// whichever surface is alive when init reaches the GL step rather than trusting the first one.
+	/// </summary>
+	private Surface WaitForSurface() {
+		while (true) {
+			var surface = _surface;
+			if (surface != null) return surface;
+			if (!_running) throw new InvalidOperationException("The activity closed before a render surface was available.");
+			_wake.WaitOne(100);
+		}
 	}
 
 	// ── render thread ────────────────────────────────────────────────────────────────────────────
@@ -293,7 +315,7 @@ public class MainActivity : Activity, ISurfaceHolderCallback {
 		global::OpenTaiko.OpenTaiko.ExternalInputDevices = new List<FDK.IInputDevice> { _input };
 
 		_glContext = new AndroidGLContext();
-		_glContext.CreateWindowSurface(_surfaceView!.Holder!.Surface!);
+		_glContext.CreateWindowSurface(WaitForSurface());
 		_glContext.MakeCurrent();
 		_glContext.SwapInterval(1);
 
